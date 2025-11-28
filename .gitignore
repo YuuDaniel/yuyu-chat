@@ -1,0 +1,15 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+venv/
+.env
+
+# Sistema Operacional
+.DS_Store
+Thumbs.db
+
+# Logs e Banco de Dados (se houver no futuro)
+*.log
+*.sqlite3
