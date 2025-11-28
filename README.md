@@ -1,4 +1,4 @@
-# ✉︎ Yuzu Chat - Comunicação Interna
+# ✉︎ YuYu Chat - Comunicação Interna
 
 Sistema de chat em tempo real desenvolvido para facilitar a comunicação entre Supervisores e Operadores de Call Center, eliminando a necessidade de deslocamento físico.
 
@@ -24,4 +24,4 @@ Sistema de chat em tempo real desenvolvido para facilitar a comunicação entre 
 
 1. **Clone o repositório:**
    ```bash
-   git clone [https://github.com/SEU-USUARIO/yuyu-chat.git](https://github.com/SEU-USUARIO/yuyu-chat.git)
+   git clone https://github.com/YuuDaniel/yuyu-chat.git 
