@@ -2,73 +2,98 @@ let ws;
 let meuId = "";
 let meuPerfil = "";
 let minhaEquipe = "";
+let meuNomeReal = ""; // Novo: guarda o nome para usar no ID
 let chatsAbertos = {};
 
 const notificacaoAudio = new Audio('/static/sounds/notification-sound-effect-372475.mp3');
 
-// --- AO CARREGAR A PÁGINA: Verifica Login e Limpa Msg Antiga ---
 window.onload = function() {
-    verificarLoginAutomatico();
+    verificarSessaoExistente();
     limparHistoricoAntigo();
 };
+
+function handleLoginEnter(e) {
+    if (e.key === 'Enter') fazerLoginAPI();
+}
 
 function toggleTheme() {
     document.body.classList.toggle('dark-mode');
 }
 
-function toggleSenha() {
-    const perfil = document.getElementById('perfil').value;
-    const divSenha = document.getElementById('div-senha');
-    
-    if (perfil === 'supervisor') {
-        divSenha.style.display = 'block';
-    } else {
-        divSenha.style.display = 'none';
-        document.getElementById('senha-input').value = ""; 
-    }
-}
+// --- LOGIN VIA API (AD) ---
+async function fazerLoginAPI() {
+    const usuarioInput = document.getElementById('usuario-ad');
+    const senhaInput = document.getElementById('senha-ad');
+    const btn = document.getElementById('btn-entrar');
+    const errorMsg = document.getElementById('error-msg');
 
-// --- SISTEMA DE LOGIN PERSISTENTE ---
-function verificarLoginAutomatico() {
-    const salvo = localStorage.getItem("yuyu_user_data");
-    if (salvo) {
-        const dados = JSON.parse(salvo);
-        // Preenche os campos (escondido) para a lógica funcionar
-        document.getElementById('nome').value = dados.nome;
-        document.getElementById('perfil').value = dados.perfil;
-        document.getElementById('equipe').value = dados.equipe;
-        if(dados.senha) document.getElementById('senha-input').value = dados.senha;
-        
-        // Conecta direto
-        conectar(true);
-    }
-}
+    const usuario = usuarioInput.value.trim();
+    const senha = senhaInput.value;
 
-function conectar(auto = false) {
-    const nome = document.getElementById('nome').value.trim();
-    meuPerfil = document.getElementById('perfil').value;
-    minhaEquipe = document.getElementById('equipe').value;
-    let senha = "";
-
-    if(!nome || !minhaEquipe) {
-        if(!auto) alert("Preencha todos os campos!");
+    if (!usuario || !senha) {
+        alert("Preencha usuário e senha!");
         return;
     }
 
-    if (meuPerfil === 'supervisor') {
-        senha = document.getElementById('senha-input').value;
-        if (!senha && !auto) return alert("Digite a senha de supervisor.");
+    btn.disabled = true;
+    btn.innerText = "Verificando...";
+    errorMsg.style.display = 'none';
+
+    try {
+        const response = await fetch('/login', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ usuario, senha })
+        });
+
+        if (!response.ok) throw new Error("Usuário ou senha incorretos.");
+
+        const dados = await response.json();
+        
+        // Salva sessão e conecta
+        localStorage.setItem("yuyu_session", JSON.stringify(dados));
+        iniciarWebSocket(dados);
+
+    } catch (erro) {
+        errorMsg.innerText = erro.message;
+        errorMsg.style.display = 'block';
+        senhaInput.value = ""; 
+        usuarioInput.focus();
+    } finally {
+        btn.disabled = false;
+        btn.innerText = "Entrar";
     }
+}
 
-    // SALVA NO NAVEGADOR (Para o F5 funcionar)
-    const dadosSalvar = { nome, perfil: meuPerfil, equipe: minhaEquipe, senha };
-    localStorage.setItem("yuyu_user_data", JSON.stringify(dadosSalvar));
+function verificarSessaoExistente() {
+    const salvo = localStorage.getItem("yuyu_session");
+    if (salvo) {
+        try {
+            const dados = JSON.parse(salvo);
+            iniciarWebSocket(dados);
+        } catch (e) {
+            console.error("Erro ao recuperar sessão:", e);
+        }
+    }
+}
 
+// --- CONEXÃO WEBSOCKET ---
+function iniciarWebSocket(dados) {
+    meuNomeReal = dados.nome;
+    meuPerfil = dados.perfil;
+    minhaEquipe = dados.equipe;
+
+    // 1. GERA O ID IGUAL AO PYTHON (nome-equipe, minusculo, sem espacos)
+    // Isso é crucial para filtrar a si mesmo da lista
+    meuId = `${meuNomeReal}-${minhaEquipe}`.toLowerCase().replace(/\s+/g, '');
+    
+    console.log("Meu ID calculado:", meuId); // Debug
+
+    const nomeSeguro = encodeURIComponent(meuNomeReal);
     const equipeSegura = encodeURIComponent(minhaEquipe);
-    const nomeSeguro = encodeURIComponent(nome);
     
     const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
-    const wsUrl = `${protocol}://${window.location.host}/ws/${meuPerfil}/${nomeSeguro}/${equipeSegura}?senha=${senha}`;
+    const wsUrl = `${protocol}://${window.location.host}/ws/${meuPerfil}/${nomeSeguro}/${equipeSegura}`;
     
     ws = new WebSocket(wsUrl);
 
@@ -76,56 +101,50 @@ function conectar(auto = false) {
         document.getElementById('login-screen').style.display = 'none';
         document.getElementById('app-screen').style.display = 'block';
         
-        document.getElementById('welcome-msg').innerText = `Olá, ${nome}`;
-        document.getElementById('welcome-team').innerText = `${meuPerfil.toUpperCase()} - ${minhaEquipe}`;
+        document.getElementById('welcome-msg').innerText = `Olá, ${meuNomeReal}`;
+        document.getElementById('welcome-team').innerText = `${minhaEquipe} (${meuPerfil})`;
         
         const titulo = document.getElementById('list-title');
-        titulo.innerText = meuPerfil === 'supervisor' ? "Painel de Operadores Online" : "Supervisores Disponíveis";
+        // Ajusta o título conforme o perfil
+        titulo.innerText = meuPerfil === 'supervisor' ? "Painel de Controle (Todos Online)" : "Supervisores Disponíveis";
     };
 
     ws.onclose = (event) => {
-        // Se o servidor fechou com o código 4003, é senha errada
-        if (event.code === 4003) {
-            alert("SENHA INCORRETA! Acesso negado.");
-            logout(); // Isso limpa os dados salvos e recarrega a página para tentar de novo
-        } 
-        else {
-            console.log("Conexão perdida. Reconectando...");
-            // Só tenta reconectar se NÃO foi erro de senha
-            setTimeout(() => conectar(true), 5000);
+        console.log("Conexão perdida.");
+        // Reconexão automática em 5s se houver sessão
+        if (localStorage.getItem("yuyu_session")) {
+            setTimeout(() => {
+                const dadosRec = JSON.parse(localStorage.getItem("yuyu_session"));
+                if(dadosRec) iniciarWebSocket(dadosRec);
+            }, 5000);
         }
     };
 
     ws.onmessage = (event) => {
-        const dados = JSON.parse(event.data);
-        if (dados.tipo === "lista_usuarios") {
-            atualizarListaUsuarios(dados.usuarios);
+        const payload = JSON.parse(event.data);
+        if (payload.tipo === "lista_usuarios") {
+            atualizarListaUsuarios(payload.usuarios);
         } 
-        else if (dados.tipo === "mensagem_privada") {
-            receberMensagem(dados);
+        else if (payload.tipo === "mensagem_privada") {
+            receberMensagem(payload);
         }
-        else if (dados.tipo === "confirmacao_leitura") {
-            marcarMensagensComoLidas(dados.quem_leu_id);
+        else if (payload.tipo === "confirmacao_leitura") {
+            marcarMensagensComoLidas(payload.quem_leu_id);
         }
     };
 }
 
 function logout() {
-    // 1. Remove os dados de login (Nome, Senha, Equipe)
-    localStorage.removeItem("yuyu_user_data");
-    
-    // 2. Opcional: Se quiser limpar as mensagens ao sair, descomente a linha abaixo.
-    // Mas para manter o histórico de 24h, deixe comentado ou apagado.
-    // localStorage.removeItem("yuyu_chat_history");
-
-    // 3. Recarrega a página (agora sem dados, vai cair na tela de login)
+    localStorage.removeItem("yuyu_session");
     window.location.reload();
 }
 
+// --- LISTA DE USUÁRIOS (AQUI ESTAVA O PROBLEMA) ---
 function atualizarListaUsuarios(usuarios) {
     const grid = document.getElementById('user-grid');
     grid.innerHTML = "";
     
+    // Ordena: Primeiro quem é da minha equipe
     usuarios.sort((a, b) => {
         if (a.equipe === minhaEquipe && b.equipe !== minhaEquipe) return -1;
         if (a.equipe !== minhaEquipe && b.equipe === minhaEquipe) return 1;
@@ -133,42 +152,66 @@ function atualizarListaUsuarios(usuarios) {
     });
 
     usuarios.forEach(user => {
+        // Não mostra a mim mesmo
         if (user.id === meuId) return; 
 
         let mostrar = false;
-        if (meuPerfil === 'supervisor') mostrar = true; 
-        else if (user.perfil === 'supervisor') mostrar = true;
+
+        // REGRAS DE VISIBILIDADE:
+        if (meuPerfil === 'supervisor') {
+            // Regra 1: Supervisor vê TODO MUNDO
+            mostrar = true;
+        } 
+        else {
+            // Regra 2: Operador só vê SUPERVISOR
+            if (user.perfil === 'supervisor') {
+                mostrar = true;
+            }
+        }
 
         if (mostrar) {
             const card = document.createElement('div');
             card.className = 'user-card online';
+            
+            // Destaque visual para supervisores ou mesma equipe
+            const isSupervisor = (user.perfil === 'supervisor');
             const isMinhaEquipe = (user.equipe === minhaEquipe);
-            const destaqueIcon = isMinhaEquipe ? "⭐" : "";
-            if(isMinhaEquipe) card.style.borderColor = "var(--primary)";
+            
+            // Ícone: Estrela para supervisor, Check para equipe
+            let icone = "";
+            if (isSupervisor) icone = "🛡️"; 
+            else if (isMinhaEquipe) icone = "⭐";
+
+            if (isMinhaEquipe) card.style.borderColor = "var(--primary)";
+            if (isSupervisor) card.style.backgroundColor = "#f0f8ff"; // Azulzinho claro para chefes
 
             card.innerHTML = `
-                <div class="card-header"><span class="card-name">${destaqueIcon} ${user.nome}</span></div>
+                <div class="card-header">
+                    <span class="card-name">${icone} ${user.nome}</span>
+                </div>
                 <div class="badges">
                     <span class="badge" style="font-weight:bold;">${user.equipe}</span>
-                    <span class="badge" style="font-style:italic;">${user.perfil}</span>
+                    <span class="badge" style="font-style:italic; font-size:0.7rem;">${user.perfil}</span>
                 </div>
             `;
             card.onclick = () => abrirPopup(user.id, user.nome);
             grid.appendChild(card);
         }
-        if (user.nome === document.getElementById('nome').value.trim() && user.equipe === minhaEquipe) {
-            meuId = user.id;
-        }
     });
 }
 
+// ... (MANTENHA O RESTANTE DO CÓDIGO DE CHAT/POPUP IGUAL AO ANTERIOR) ...
+// Copie daqui para baixo as funções: abrirPopup, fecharPopup, handleEnter, 
+// enviarConfirmacaoLeitura, receberMensagem, renderizarMensagem, etc.
+// Se precisar que eu mande o arquivo completo novamente, avise.
+
 // --- SISTEMA DE POPUP (Minimizar + Histórico) ---
+// (Cole aqui as funções abrirPopup, fecharPopup, handleEnter, enviarConfirmacaoLeitura, marcarMensagensComoLidas)
 
 function abrirPopup(targetId, targetName) {
-    // Se já está aberto, restaura (desminimiza)
     if (chatsAbertos[targetId]) {
         const popup = chatsAbertos[targetId];
-        popup.classList.remove('minimized'); // Garante que abre
+        popup.classList.remove('minimized');
         const input = popup.querySelector('input');
         if(input) {
             input.focus();
@@ -183,31 +226,28 @@ function abrirPopup(targetId, targetName) {
     popup.id = `popup-${targetId}`;
 
     popup.innerHTML = `
-        <div class="popup-header">
-            <span>${targetName}</span>
+        <div class="popup-header" title="${targetName}"> <span>${targetName}</span>
             <button class="close-btn">×</button>
         </div>
         <div class="popup-body" id="msgs-${targetId}"></div>
         <div class="popup-footer">
-            <input type="text" placeholder="Digite uma mensagem..." 
+            <input type="text" placeholder="Digite..." 
                 onkeypress="handleEnter('${targetId}', event)"
                 onfocus="enviarConfirmacaoLeitura('${targetId}')"
                 onclick="enviarConfirmacaoLeitura('${targetId}')"
+                autocomplete="off"
             >
         </div>
     `;
 
-    // LÓGICA DE CLIQUE NO HEADER (Minimizar vs Fechar)
     const header = popup.querySelector('.popup-header');
     const closeBtn = popup.querySelector('.close-btn');
 
-    // 1. Botão Fechar
     closeBtn.onclick = (e) => {
-        e.stopPropagation(); // Impede que o clique passe para o header (evita minimizar ao fechar)
+        e.stopPropagation();
         fecharPopup(targetId);
     };
 
-    // 2. Clicar no Header (Minimizar/Restaurar)
     header.onclick = () => {
         popup.classList.toggle('minimized');
     };
@@ -215,9 +255,7 @@ function abrirPopup(targetId, targetName) {
     container.appendChild(popup);
     chatsAbertos[targetId] = popup;
 
-    // CARREGA HISTÓRICO LOCAL
     carregarHistoricoLocal(targetId);
-    
     enviarConfirmacaoLeitura(targetId);
 }
 
@@ -233,14 +271,12 @@ function handleEnter(targetId, event) {
     if (event.key === 'Enter') {
         const input = event.target;
         const texto = input.value.trim();
-        
         if (texto) {
             const dadosMsg = {
                 target_id: targetId,
                 message: texto
             };
             ws.send(JSON.stringify(dadosMsg));
-            
             input.value = "";
             input.focus();
         }
@@ -267,22 +303,18 @@ function receberMensagem(dados) {
     let idConversa = (dados.remetente_id === "eu") ? dados.destinatario_id : dados.remetente_id;
     let classeCss = (dados.remetente_id === "eu") ? "enviada" : "recebida";
     
-    // Salva no LocalStorage
     salvarMensagemLocal(idConversa, {
         texto: dados.texto,
         classe: classeCss,
         hora: dados.hora,
-        timestamp: new Date().getTime() // Para controlar as 24h
+        timestamp: new Date().getTime()
     });
 
-    // Se for recebida, toca som e abre popup
     if (classeCss === "recebida") {
         notificacaoAudio.play().catch(() => {});
         if (!chatsAbertos[idConversa]) {
             abrirPopup(idConversa, dados.remetente_nome);
         } else {
-            // Se estiver minimizado e receber msg, pode querer dar um destaque (opcional)
-            // chatsAbertos[idConversa].classList.remove('minimized'); // Descomente se quiser que abra sozinho
             setTimeout(() => enviarConfirmacaoLeitura(idConversa), 500);
         }
     }
@@ -309,13 +341,8 @@ function renderizarMensagem(idConversa, texto, classe, hora) {
 
 // -- FUNÇÕES DE ARMAZENAMENTO LOCAL (HISTÓRICO) --
 function salvarMensagemLocal(idConversa, msgObj) {
-    // Pega o histórico atual ou cria vazio
     let historico = JSON.parse(localStorage.getItem("yuyu_chat_history")) || {};
-    
-    if (!historico[idConversa]) {
-        historico[idConversa] = [];
-    }
-    
+    if (!historico[idConversa]) historico[idConversa] = [];
     historico[idConversa].push(msgObj);
     localStorage.setItem("yuyu_chat_history", JSON.stringify(historico));
 }
@@ -332,21 +359,11 @@ function carregarHistoricoLocal(idConversa) {
 function limparHistoricoAntigo() {
     let historico = JSON.parse(localStorage.getItem("yuyu_chat_history"));
     if (!historico) return;
-
     const agora = new Date().getTime();
-    const umDia = 24 * 60 * 60 * 1000; // 24 horas em milissegundos
-
+    const umDia = 24 * 60 * 60 * 1000;
     for (let idConv in historico) {
-        // Filtra mantendo apenas as mensagens com menos de 24h
-        historico[idConv] = historico[idConv].filter(msg => {
-            return (agora - msg.timestamp) < umDia;
-        });
-        
-        // Se a conversa ficar vazia, deleta a chave
-        if (historico[idConv].length === 0) {
-            delete historico[idConv];
-        }
+        historico[idConv] = historico[idConv].filter(msg => (agora - msg.timestamp) < umDia);
+        if (historico[idConv].length === 0) delete historico[idConv];
     }
-    
     localStorage.setItem("yuyu_chat_history", JSON.stringify(historico));
 }

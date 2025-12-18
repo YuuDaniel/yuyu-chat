@@ -1,22 +1,50 @@
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Body
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
+from pydantic import BaseModel # Para receber o JSON do login
 from typing import Dict
 from datetime import datetime
-import os # <--- 1. IMPORTANTE: Importamos a biblioteca OS
+import os
+
+# IMPORTA O ARQUIVO NOVO
+from ad_auth import autenticar_ad
+from logger import salvar_log_conversa 
 
 app = FastAPI()
 
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
+# --- MODELO DE DADOS PARA O LOGIN ---
+class LoginData(BaseModel):
+    usuario: str
+    senha: str
+
 @app.get("/")
 async def get():
-    # 2. CORREÇÃO: Pega o caminho exato onde o script está rodando
     caminho_arquivo = os.path.join(os.path.dirname(__file__), "index.html")
-    
-    # Agora abrimos usando o caminho completo
     with open(caminho_arquivo, "r", encoding="utf-8") as f:
         return HTMLResponse(content=f.read())
+
+# --- NOVA ROTA DE LOGIN (HTTP) ---
+
+@app.post("/login")
+async def login_endpoint(dados: LoginData):
+    """
+    Recebe usuario e senha, valida no AD e retorna o perfil correto.
+    """
+    # 1. Tenta autenticar no Active Directory
+    resultado = autenticar_ad(dados.usuario, dados.senha)
+    
+    if resultado and resultado['sucesso']:
+        return {
+            "sucesso": True,
+            "nome": resultado['nome'],
+            "equipe": resultado['equipe'],
+            "perfil": resultado['perfil'] # Supervisor ou Operador (Vindo do AD)
+        }
+    else:
+        # Se falhar no AD, nega o acesso
+        raise HTTPException(status_code=401, detail="Usuário ou senha incorretos.")
 
 class ConnectionManager:
     def __init__(self):
@@ -79,42 +107,31 @@ class ConnectionManager:
 
 manager = ConnectionManager()
 
-# --- DEFINA A SENHA MESTRA AQUI ---
-SENHA_ADMIN = "123456"  # <--- Coloque a senha que você quiser
-
 @app.websocket("/ws/{perfil}/{nome}/{equipe}")
-async def websocket_endpoint(websocket: WebSocket, perfil: str, nome: str, equipe: str, senha: str = ""):
+async def websocket_endpoint(websocket: WebSocket, perfil: str, nome: str, equipe: str):
     
-    # LÓGICA DE SEGURANÇA CORRIGIDA:
-    if perfil == "supervisor" and senha != SENHA_ADMIN:
-        # 1. ACEITA A CONEXÃO (Para conseguir enviar o código de erro)
-        await websocket.accept()
-        # 2. FECHA IMEDIATAMENTE COM O CÓDIGO 4003
-        await websocket.close(code=4003)
-        return
-
-    # Se a senha estiver certa (ou for operador), segue a vida...
     user_id = f"{nome}-{equipe}".lower().replace(" ", "")
     
     dados_usuario = {
         "id": user_id,
-        "nome": nome,
+        "nome": nome, # Esse é o nome real que veio do AD
         "perfil": perfil,
         "equipe": equipe
     }
 
-    # O manager.connect já faz o accept() para usuários válidos, 
-    # então não mexemos aqui.
     await manager.connect(websocket, user_id, dados_usuario)
-    
-    # ... resto do código igual ...
     
     try:
         while True:
             data = await websocket.receive_json()
             
             if "target_id" in data and "message" in data:
+                # 1. Envia a mensagem (Sua lógica atual)
                 await manager.send_private_message(user_id, data["target_id"], data["message"])
+                
+                # 2. SALVA O LOG (NOVO)
+                # Passamos: Quem enviou (Nome Real), Para quem (ID), e o Texto
+                salvar_log_conversa(nome, data["target_id"], data["message"])
             
             elif "read_confirmation" in data:
                 target = data["read_confirmation"]
