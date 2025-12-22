@@ -2,14 +2,21 @@ let ws;
 let meuId = "";
 let meuPerfil = "";
 let minhaEquipe = "";
-let meuNomeReal = ""; // Novo: guarda o nome para usar no ID
+let meuNomeReal = "";
 let chatsAbertos = {};
+let mensagensNaoLidas = 0;
+const tituloOriginal = document.title; // Salva "YuYu-Chat Corporativo"
 
 const notificacaoAudio = new Audio('/static/sounds/notification-sound-effect-372475.mp3');
 
 window.onload = function() {
     verificarSessaoExistente();
     limparHistoricoAntigo();
+};
+
+window.onfocus = function() {
+    mensagensNaoLidas = 0;
+    document.title = tituloOriginal;
 };
 
 function handleLoginEnter(e) {
@@ -179,11 +186,11 @@ function atualizarListaUsuarios(usuarios) {
             
             // Ícone: Estrela para supervisor, Check para equipe
             let icone = "";
-            if (isSupervisor) icone = "🛡️"; 
-            else if (isMinhaEquipe) icone = "⭐";
+            if (isSupervisor) icone = "⭐"; 
+            else if (isMinhaEquipe) icone = "🎧";
 
             if (isMinhaEquipe) card.style.borderColor = "var(--primary)";
-            if (isSupervisor) card.style.backgroundColor = "#f0f8ff"; // Azulzinho claro para chefes
+            if (isSupervisor) card.classList.add('supervisor-card'); // Azulzinho claro para chefes
 
             card.innerHTML = `
                 <div class="card-header">
@@ -303,15 +310,27 @@ function receberMensagem(dados) {
     let idConversa = (dados.remetente_id === "eu") ? dados.destinatario_id : dados.remetente_id;
     let classeCss = (dados.remetente_id === "eu") ? "enviada" : "recebida";
     
+    let nomeExibir = (classeCss === "recebida") ? dados.remetente_nome : "Eu";
+
     salvarMensagemLocal(idConversa, {
         texto: dados.texto,
         classe: classeCss,
         hora: dados.hora,
+        nome: nomeExibir, 
         timestamp: new Date().getTime()
     });
 
     if (classeCss === "recebida") {
         notificacaoAudio.play().catch(() => {});
+
+        // --- NOVO: ATUALIZA O TÍTULO DA ABA ---
+        // Se a janela não estiver em foco (usuário está em outra aba), incrementa
+        if (document.hidden) { 
+            mensagensNaoLidas++;
+            document.title = `(${mensagensNaoLidas}) Nova Mensagem`;
+        }
+        // --------------------------------------
+
         if (!chatsAbertos[idConversa]) {
             abrirPopup(idConversa, dados.remetente_nome);
         } else {
@@ -319,7 +338,7 @@ function receberMensagem(dados) {
         }
     }
 
-    renderizarMensagem(idConversa, dados.texto, classeCss, dados.hora);
+    renderizarMensagem(idConversa, dados.texto, classeCss, dados.hora, nomeExibir);
 }
 
 function renderizarMensagem(idConversa, texto, classe, hora) {

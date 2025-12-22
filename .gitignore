@@ -13,3 +13,4 @@ Thumbs.db
 # Logs e Banco de Dados (se houver no futuro)
 *.log
 *.sqlite3
+logs/
